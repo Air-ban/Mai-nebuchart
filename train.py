@@ -5,7 +5,7 @@ from model import ChartTransformer
 
 # ---------- 超参 ----------
 MAX_LEN   = 1024
-BATCH_SZ  = 64
+BATCH_SZ  = 16  # Reduce batch size due to more complex model
 EPOCHS    = 50
 LR        = 3e-4
 DEVICE    = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -42,13 +42,15 @@ def run_epoch(model, loader, optimizer=None):
     total_loss, n = 0, 0
     for feat, tgt_in, tgt_out, diff in loader:
         feat, tgt_in, tgt_out, diff = feat.to(DEVICE), tgt_in.to(DEVICE), tgt_out.to(DEVICE), diff.to(DEVICE)
-        mask = nn.Transformer.generate_square_subsequent_mask(tgt_in.size(1)).to(DEVICE)
+        mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt_in.size(1)).to(DEVICE)
         logits = model(feat, tgt_in, diff, mask)
         loss = torch.nn.CrossEntropyLoss(ignore_index=0)(
             logits.reshape(-1, logits.size(-1)), tgt_out.reshape(-1))
         if optimizer:
             optimizer.zero_grad()
             loss.backward()
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         total_loss += loss.item() * feat.size(0)
         n += feat.size(0)
@@ -65,12 +67,20 @@ def main():
                               num_workers=4, collate_fn=pad_collate)
 
     model = ChartTransformer(len(vocab)).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)  # Using AdamW with weight decay
 
     for epoch in range(1, EPOCHS + 1):
         tr_loss = run_epoch(model, train_loader, optimizer)
         val_loss = run_epoch(model, val_loader, None)
         print(f'epoch {epoch:02d} | train_loss={tr_loss:.4f} | val_loss={val_loss:.4f}')
+        
+        # Save best model based on validation loss
+        if epoch == 1 or val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'ckpt/chart_best.pth')
+            print(f'Saved best model with val_loss={val_loss:.4f}')
+    
+    # Save final model
     torch.save(model.state_dict(), 'ckpt/chart_final.pth')
     print('saved ckpt/chart_final.pth')
 
