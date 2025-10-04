@@ -1,0 +1,6 @@
+# 不跟踪文件夹
+__pycache__/
+data/
+
+# 不跟踪特定文件
+IFLOW.md
